@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>SatCalc</title>
+<meta name="description" content="A sat-native calculator — every amount shown in USD and satoshis at once.">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="SatCalc">
+<meta name="theme-color" content="#000000">
+<style>
+  :root{
+    --bg:#000;
+    --digit:#333; --digit-tap:#737373;
+    --func:#a5a5a5; --func-tap:#d9d9d9;
+    --btc:#f7931a;                            /* Bitcoin orange */
+    --op:var(--btc); --op-tap:#fabe76;
+    --dim:#8e8e93; --dimmer:#5a5a5e;
+    --live:#30d158; --stale:#ff9f0a; --dead:#ff453a;
+    --gap:12px;
+    --sf:-apple-system,"SF Pro Display","SF Pro Text","Helvetica Neue",Helvetica,Arial,sans-serif;
+    --ease:cubic-bezier(.32,.72,0,1);
+    --spring:cubic-bezier(.2,.8,.3,1);
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+  html,body{margin:0;background:#0d0d0f;color:#fff;font-family:var(--sf);}
+  body{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:14px 12px 40px;min-height:100vh;}
+
+  /* ---------- phone ---------- */
+  .phone{
+    position:relative;overflow:hidden;
+    width:100%;max-width:390px;background:var(--bg);
+    border-radius:34px;padding:16px 14px 22px;
+    display:flex;flex-direction:column;
+    box-shadow:0 0 0 1px #212126, 0 22px 60px rgba(0,0,0,.6);
+  }
+
+  /* grain: dithers the gradients, turns the black from absence into material */
+  .grain{
+    position:absolute;inset:0;z-index:5;pointer-events:none;opacity:.05;
+    border-radius:inherit;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+
+  .chip{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--dimmer);padding:2px 6px 0;height:16px;font-variant-numeric:tabular-nums;position:relative;z-index:2;}
+  .dot{width:5px;height:5px;border-radius:50%;background:var(--live);flex:none;transition:background .3s var(--ease);}
+  .dot.stale{background:var(--stale);}
+  .dot.unavailable{background:var(--dead);}
+
+  /* ---------- display ---------- */
+  .display{
+    position:relative;z-index:2;
+    display:flex;flex-direction:column;justify-content:flex-end;
+    padding:16px 8px 12px 8px;gap:6px;min-height:180px;overflow:hidden;
+    user-select:none;
+  }
+  .swap{
+    position:absolute;left:2px;top:50%;transform:translateY(-2px);
+    width:34px;height:34px;border:0;background:transparent;padding:0;
+    color:var(--dimmer);font-size:19px;line-height:1;cursor:pointer;
+    display:flex;align-items:center;justify-content:center;border-radius:50%;
+    transition:color .18s var(--ease), background .18s var(--ease), opacity .18s var(--ease);
+  }
+  .swap:hover{color:var(--dim);background:#141416;}
+  .swap:focus-visible{outline:2px solid var(--op);outline-offset:1px;}
+  .swap[disabled]{opacity:.32;cursor:default;}
+
+  .row{
+    display:flex;align-items:flex-end;justify-content:flex-end;
+    height:55px;width:100%;border:0;background:transparent;padding:0;margin:0;
+    text-align:right;white-space:nowrap;cursor:pointer;font-family:var(--sf);
+    line-height:1.02;
+    transition:color .22s var(--ease), font-size .22s var(--ease), font-weight .22s var(--ease);
+  }
+  .row.active{color:#fff;font-weight:200;letter-spacing:-.02em;}
+  .row.idle  {color:var(--dim);font-weight:300;letter-spacing:-.015em;font-size:36px;}
+  .row[disabled]{cursor:default;}
+  #satRow{order:1;}
+  #usdRow{order:2;}
+  .unit{font-size:.68em;opacity:.62;margin-left:.2em;font-weight:400;letter-spacing:0;}
+  .row.idle .unit{opacity:.8;}
+  .row:focus-visible{outline:2px solid var(--op);outline-offset:4px;border-radius:8px;}
+  #mirror{position:absolute;visibility:hidden;white-space:nowrap;left:-9999px;top:0;pointer-events:none;}
+
+  /* ---------- keypad ---------- */
+  .keypad{position:relative;display:grid;grid-template-columns:repeat(4,1fr);gap:var(--gap);margin-top:8px;z-index:2;}
+
+  /* the signature: the orange column is the light source, spilling into the gaps */
+  .keypad::before{
+    content:'';position:absolute;z-index:0;pointer-events:none;
+    top:-14px;right:-18px;bottom:-14px;left:45%;
+    filter:blur(10px);
+    background:radial-gradient(70% 90% at 100% 50%, rgba(247,147,26,.14), rgba(247,147,26,0) 72%);
+  }
+
+  .key{
+    position:relative;z-index:1;
+    appearance:none;border:0;aspect-ratio:1/1;border-radius:50%;
+    font-family:var(--sf);font-size:34px;font-weight:400;
+    color:#fff;background:var(--digit);cursor:pointer;
+    display:flex;align-items:center;justify-content:center;padding:0;
+    transition:background .1s ease-out, transform .1s var(--spring),
+               box-shadow .25s var(--ease), opacity .18s var(--ease), color .1s ease-out;
+    box-shadow:
+      inset 0  3px 7px rgba(0,0,0,.30),
+      inset 0 -2px 5px rgba(255,255,255,.055),
+      inset 0  0   0  .5px rgba(255,255,255,.03);
+  }
+  .key.fn{
+    background:var(--func);color:#000;font-size:31px;
+    box-shadow:
+      inset 0 3px 7px rgba(0,0,0,.16),
+      inset 0 -2px 5px rgba(255,255,255,.18);
+  }
+  .key.op{
+    background:var(--op);font-size:38px;
+    box-shadow:
+      inset 0 3px 7px rgba(0,0,0,.20),
+      inset 0 -2px 5px rgba(255,255,255,.15);
+  }
+  .key.wide{grid-column:span 2;aspect-ratio:auto;border-radius:999px;justify-content:flex-start;padding-left:14.5%;}
+  .key.tap{background:var(--digit-tap);}
+  .key.fn.tap{background:var(--func-tap);}
+  .key.op.tap{background:var(--op-tap);}
+  .key.op[aria-pressed="true"]{background:#fff;color:var(--op);}
+  .key:focus-visible{outline:3px solid #fff;outline-offset:3px;}
+  .key[disabled]{opacity:.32;cursor:default;}
+
+  /* keys adjacent to the orange column pick up its bounce */
+  .key.warm{
+    box-shadow:
+      inset 0  3px 7px rgba(0,0,0,.30),
+      inset 0 -2px 5px rgba(255,255,255,.055),
+      inset 0  0   0  .5px rgba(255,255,255,.03),
+      inset -8px 0 15px -8px rgba(247,147,26,.30);
+  }
+  /* the dish gets physical follow-through */
+  .key:active, .key.tap{ transform:translateY(1px) scale(.985); }
+
+  @media (prefers-reduced-motion:reduce){*{transition:none!important;}}
+</style>
+</head>
+<body>
+
+<div class="phone" id="phone">
+  <div class="grain"></div>
+
+  <div class="chip"><span class="dot" id="chipDot"></span><span id="chipText">live · $—/BTC</span></div>
+
+  <div class="display" id="display">
+    <button class="swap" id="swap" aria-label="Move editing focus to the other unit">⇅</button>
+    <span id="mirror"></span>
+    <button class="row idle" id="satRow" aria-label="Edit in sats"></button>
+    <button class="row active" id="usdRow" aria-label="Edit in dollars"></button>
+  </div>
+
+  <div class="keypad" id="keypad">
+    <button class="key fn" data-k="clear" id="clearKey">AC</button>
+    <button class="key fn" data-k="neg">+/−</button>
+    <button class="key fn" data-k="pct">%</button>
+    <button class="key op" data-k="÷" aria-pressed="false">÷</button>
+
+    <button class="key" data-k="7">7</button>
+    <button class="key" data-k="8">8</button>
+    <button class="key warm" data-k="9">9</button>
+    <button class="key op" data-k="×" aria-pressed="false">×</button>
+
+    <button class="key" data-k="4">4</button>
+    <button class="key" data-k="5">5</button>
+    <button class="key warm" data-k="6">6</button>
+    <button class="key op" data-k="−" aria-pressed="false">−</button>
+
+    <button class="key" data-k="1">1</button>
+    <button class="key" data-k="2">2</button>
+    <button class="key warm" data-k="3">3</button>
+    <button class="key op" data-k="+" aria-pressed="false">+</button>
+
+    <button class="key wide" data-k="0">0</button>
+    <button class="key warm" data-k="dot" id="dotKey">.</button>
+    <button class="key op" data-k="eq">=</button>
+  </div>
+</div>
+
+<script>
+(function(){
+  var MAXD = 9;
+  var PRICE_KEY = 'satcalc.price';
+  var LIVE_MS = 5*60*1000, STALE_MS = 24*60*60*1000, POLL_MS = 60*1000, TICK_MS = 15*1000;
+
+  var price = null, priceAsOf = null, devPriceOverride = false;
+
+  var st = { unit:'usd', disp:"0", acc:null, op:null, wait:false, lastOp:null, lastArg:null, err:false };
+
+  var phone    = document.getElementById('phone');
+  var display  = document.getElementById('display');
+  var usdRow   = document.getElementById('usdRow');
+  var satRow   = document.getElementById('satRow');
+  var mirror   = document.getElementById('mirror');
+  var clearKey = document.getElementById('clearKey');
+  var dotKey   = document.getElementById('dotKey');
+  var chipText = document.getElementById('chipText');
+  var chipDot  = document.getElementById('chipDot');
+  var swapBtn  = document.getElementById('swap');
+
+  function group(n){ return n.toLocaleString('en-US'); }
+
+  function fmtEntry(s){
+    if(s==="Error") return s;
+    var neg = s.charAt(0)==='-';
+    var t = neg ? s.slice(1) : s;
+    var parts = t.split('.');
+    var head = group(parseInt(parts[0]||"0",10));
+    var out = head + (t.indexOf('.')>-1 ? '.'+(parts[1]||'') : '');
+    return (neg?'−':'')+out;
+  }
+
+  function toSats(usd){ return usd/price*1e8; }
+  function toUsd(sats){ return sats/1e8*price; }
+
+  /* ---------- price feed ---------- */
+
+  function loadCachedPrice(){
+    try{
+      var raw = localStorage.getItem(PRICE_KEY);
+      if(!raw) return;
+      var obj = JSON.parse(raw);
+      if(obj && typeof obj.price==='number' && typeof obj.timestamp==='number' && obj.price>0){
+        price = obj.price; priceAsOf = obj.timestamp;
+      }
+    }catch(e){}
+  }
+
+  function saveCachedPrice(){
+    try{ localStorage.setItem(PRICE_KEY, JSON.stringify({price:price, timestamp:priceAsOf})); }catch(e){}
+  }
+
+  function applyDevOverride(){
+    var params = new URLSearchParams(window.location.search);
+    var raw = params.get('price');
+    if(raw===null) return false;
+    var p = parseFloat(raw);
+    if(!(p>0)) return false;
+    price = p; priceAsOf = Date.now(); devPriceOverride = true;
+    return true;
+  }
+
+  async function fetchOne(url, parse){
+    var res = await fetch(url, {cache:'no-store'});
+    if(!res.ok) throw new Error('bad status');
+    var json = await res.json();
+    var v = parse(json);
+    if(!(v>0) || !isFinite(v)) throw new Error('bad value');
+    return v;
+  }
+
+  var PRICE_SOURCES = [
+    ['https://api.coinbase.com/v2/prices/BTC-USD/spot', function(j){ return parseFloat(j.data.amount); }],
+    ['https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd', function(j){ return j.bitcoin.usd; }],
+    ['https://api.kraken.com/0/public/Ticker?pair=XBTUSD', function(j){ var k=Object.keys(j.result)[0]; return parseFloat(j.result[k].c[0]); }]
+  ];
+
+  async function fetchPrice(){
+    if(devPriceOverride) return;
+    for(var i=0;i<PRICE_SOURCES.length;i++){
+      try{
+        var v = await fetchOne(PRICE_SOURCES[i][0], PRICE_SOURCES[i][1]);
+        price = v; priceAsOf = Date.now();
+        saveCachedPrice();
+        render();
+        return;
+      }catch(e){ /* try next source */ }
+    }
+    render(); // all sources failed — leave cached price as-is, staleness recomputes on its own
+  }
+
+  function priceState(){
+    if(price===null || priceAsOf===null) return 'unavailable';
+    var age = Date.now() - priceAsOf;
+    if(age < LIVE_MS) return 'live';
+    if(age < STALE_MS) return 'stale';
+    return 'unavailable';
+  }
+
+  function fmtAge(ms){
+    var mins = Math.floor(ms/60000);
+    if(mins < 1) return 'just now';
+    if(mins < 60) return mins+'m ago';
+    return Math.floor(mins/60)+'h ago';
+  }
+
+  function renderChip(ps){
+    chipDot.className = 'dot' + (ps==='stale' ? ' stale' : ps==='unavailable' ? ' unavailable' : '');
+    if(ps==='live') chipText.textContent = 'live · $'+group(Math.round(price))+'/BTC';
+    else if(ps==='stale') chipText.textContent = fmtAge(Date.now()-priceAsOf)+' · $'+group(Math.round(price))+'/BTC';
+    else chipText.textContent = 'price unavailable';
+  }
+
+  /* ---------- calculator core ---------- */
+
+  function fitActive(el, html){
+    var MAX = 51, MIN = 20;
+    var avail = el.clientWidth;
+    if(!avail) return MAX;
+    mirror.style.font = '200 100px ' + getComputedStyle(el).fontFamily;
+    mirror.style.letterSpacing = '-.02em';
+    mirror.innerHTML = html;
+    var w100 = mirror.getBoundingClientRect().width;
+    if(!w100) return MAX;
+    return Math.max(MIN, Math.min(MAX, Math.floor(100 * avail / w100)));
+  }
+
+  function render(){
+    var ps = priceState();
+    var active = st.unit;
+    var usdHTML, satHTML;
+
+    if(st.err){
+      usdHTML = 'Error'; satHTML = '—';
+    } else {
+      var entryText = fmtEntry(st.disp);
+      var entryHTML = entryText + '<span class="unit">' + (active==='usd'?'USD':'sats') + '</span>';
+      if(active==='usd') usdHTML = entryHTML; else satHTML = entryHTML;
+
+      if(ps==='unavailable'){
+        if(active==='usd') satHTML = '—'; else usdHTML = '—';
+      } else {
+        var v = parseFloat(st.disp); if(isNaN(v)) v = 0;
+        if(active==='usd'){
+          satHTML = group(Math.trunc(toSats(v))) + '<span class="unit">sats</span>';
+        } else {
+          usdHTML = group(Math.round(toUsd(v)*100)/100) + '<span class="unit">USD</span>';
+        }
+      }
+    }
+
+    usdRow.className = 'row ' + (active==='usd' ? 'active' : 'idle');
+    satRow.className = 'row ' + (active==='sat' ? 'active' : 'idle');
+    usdRow.setAttribute('aria-pressed', active==='usd');
+    satRow.setAttribute('aria-pressed', active==='sat');
+
+    usdRow.innerHTML = usdHTML;
+    satRow.innerHTML = satHTML;
+
+    if(active==='usd'){
+      usdRow.style.fontSize = fitActive(usdRow, usdHTML) + 'px';
+      satRow.style.fontSize = '';
+    } else {
+      satRow.style.fontSize = fitActive(satRow, satHTML) + 'px';
+      usdRow.style.fontSize = '';
+    }
+
+    var lockFocus = (ps==='unavailable') || st.err;
+    swapBtn.disabled = lockFocus;
+    usdRow.disabled = lockFocus && active!=='usd';
+    satRow.disabled = lockFocus && active!=='sat';
+
+    dotKey.disabled = (active==='sat');
+    clearKey.textContent = (st.disp==="0" && st.acc===null && !st.op) ? 'AC' : 'C';
+
+    renderChip(ps);
+
+    document.querySelectorAll('.key.op[data-k]').forEach(function(b){
+      var k=b.getAttribute('data-k');
+      if(k==='eq') return;
+      b.setAttribute('aria-pressed', (st.op===k && st.wait) ? 'true':'false');
+    });
+  }
+
+  function focusUnit(u){
+    if(st.unit===u || st.err) return;
+    if(priceState()==='unavailable') return;
+    var convert = (u==='sat')
+      ? function(x){ return Math.trunc(toSats(x)); }
+      : function(x){ return Math.round(toUsd(x)*100)/100; };
+    var v = parseFloat(st.disp); if(isNaN(v)) v = 0;
+    st.disp = String(convert(v));
+    if(st.acc !== null) st.acc = convert(st.acc);
+    if(st.lastOp !== null) st.lastArg = convert(st.lastArg);
+    st.unit = u;
+    render();
+  }
+
+  function digits(s){ return s.replace(/[-.]/g,'').length; }
+  function reset(){ st={unit:st.unit,disp:"0",acc:null,op:null,wait:false,lastOp:null,lastArg:null,err:false}; }
+
+  function inputDigit(d){
+    if(st.err) reset();
+    if(st.wait){ st.disp = d; st.wait=false; }
+    else if(st.disp==="0") st.disp = d;
+    else if(digits(st.disp) < MAXD) st.disp += d;
+  }
+  function inputDot(){
+    if(st.unit==='sat') return;
+    if(st.err) reset();
+    if(st.wait){ st.disp="0."; st.wait=false; return; }
+    if(st.disp.indexOf('.')===-1) st.disp += '.';
+  }
+  function clearPress(){
+    if(clearKey.textContent==='AC') reset();
+    else { st.disp="0"; st.wait=false; st.err=false; }
+  }
+  function compute(a,op,b){
+    if(op==='+') return a+b;
+    if(op==='−') return a-b;
+    if(op==='×') return a*b;
+    if(op==='÷') return b===0 ? null : a/b;
+    return b;
+  }
+  function clip(n){
+    if(!isFinite(n)) return null;
+    var s = parseFloat(n.toPrecision(12));
+    if(Math.abs(s) >= 1e9) return null;
+    return Math.round(s*1e6)/1e6;
+  }
+  function setOp(op){
+    if(st.err) return;
+    var v = parseFloat(st.disp);
+    if(st.op && !st.wait && st.acc!==null){
+      var r = compute(st.acc, st.op, v);
+      r = r===null ? null : clip(r);
+      if(r===null){ st.disp="Error"; st.err=true; st.op=null; st.acc=null; render(); return; }
+      st.acc = r; st.disp = String(r);
+    } else st.acc = v;
+    st.op = op; st.wait = true; st.lastOp=null; st.lastArg=null;
+  }
+  function equals(){
+    if(st.err) return;
+    var v = parseFloat(st.disp), r;
+    if(st.op && st.acc!==null){ st.lastOp=st.op; st.lastArg=v; r = compute(st.acc, st.op, v); }
+    else if(st.lastOp!==null){ r = compute(v, st.lastOp, st.lastArg); }
+    else { st.wait=true; return; }
+    r = r===null ? null : clip(r);
+    if(r===null){ st.disp="Error"; st.err=true; st.op=null; st.acc=null; return; }
+    if(st.unit==='sat') r = Math.trunc(r);
+    st.disp = String(r); st.acc=null; st.op=null; st.wait=true;
+  }
+  function negate(){ if(!st.err && st.disp!=="0") st.disp = st.disp.charAt(0)==='-' ? st.disp.slice(1) : '-'+st.disp; }
+  function percent(){
+    if(st.err) return;
+    var r = clip(parseFloat(st.disp)/100);
+    if(r===null) return;
+    if(st.unit==='sat') r = Math.trunc(r);
+    st.disp = String(r);
+  }
+  function backspace(){
+    if(st.err){ reset(); render(); return; }
+    if(st.wait) return;
+    var s = st.disp.slice(0,-1);
+    if(s===''||s==='-') s="0";
+    st.disp = s; render();
+  }
+
+  function press(k){
+    if(/^[0-9]$/.test(k)) inputDigit(k);
+    else if(k==='dot') inputDot();
+    else if(k==='clear') clearPress();
+    else if(k==='neg') negate();
+    else if(k==='pct') percent();
+    else if(k==='eq') equals();
+    else setOp(k);
+    render();
+  }
+
+  document.getElementById('keypad').addEventListener('click', function(e){
+    var b = e.target.closest('.key');
+    if(b && !b.disabled) press(b.getAttribute('data-k'));
+  });
+  usdRow.addEventListener('click', function(){ focusUnit('usd'); });
+  satRow.addEventListener('click', function(){ focusUnit('sat'); });
+  swapBtn.addEventListener('click', function(e){
+    e.stopPropagation();
+    focusUnit(st.unit==='usd' ? 'sat' : 'usd');
+  });
+
+  var KEYMAP = {'+':'+','-':'−','*':'×','/':'÷','=':'eq','Enter':'eq','.':'dot',
+                'Escape':'clear','%':'pct','Backspace':'__bs'};
+  document.addEventListener('keydown', function(e){
+    if(e.key==='Tab') return;
+    var mapped = /^[0-9]$/.test(e.key) ? e.key : KEYMAP[e.key];
+    if(!mapped) return;
+    e.preventDefault();
+    if(mapped==='__bs'){ backspace(); return; }
+    press(mapped);
+    var btn = document.querySelector('.key[data-k="'+mapped+'"]');
+    if(btn && !btn.disabled){ btn.classList.add('tap'); setTimeout(function(){btn.classList.remove('tap');},90); }
+  });
+
+  var sx=null, moved=false;
+  display.addEventListener('touchstart', function(e){ sx=e.touches[0].clientX; moved=false; }, {passive:true});
+  display.addEventListener('touchmove',  function(e){ if(sx!==null && Math.abs(e.touches[0].clientX-sx)>34) moved=true; }, {passive:true});
+  display.addEventListener('touchend',   function(e){ if(moved) backspace(); sx=null; });
+
+  window.addEventListener('resize', render);
+
+  /* ---------- boot ---------- */
+  loadCachedPrice();
+  var overridden = applyDevOverride();
+  render();
+  if(!overridden) fetchPrice();
+
+  setInterval(function(){ if(!document.hidden) fetchPrice(); }, POLL_MS);
+  document.addEventListener('visibilitychange', function(){ if(!document.hidden) fetchPrice(); });
+  setInterval(render, TICK_MS);
+})();
+</script>
+</body>
+</html>
